@@ -45,7 +45,9 @@ function encWbi(params, mixinKey) {
 }
 
 module.exports = defineConfig({
-  publicPath: '/zhongyi/',
+  /* 相对路径：部署到 Netlify 等任意根路径/子路径都能正确加载 js/css/assets。
+     （绝对路径 /zhongyi/ 会导致部署到站点根目录时资源 404 → 白屏） */
+  publicPath: './',
   transpileDependencies: true,
   chainWebpack: (config) => {
     // 当前工作目录路径包含括号（如 "my-vue-app (2)"），会让 vue-cli 默认用来忽略

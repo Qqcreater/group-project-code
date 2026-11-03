@@ -1,0 +1,28 @@
+# Netlify 部署配置
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# ===== 后端代理（与 vue.config.js 中 devServer.proxy 等价）=====
+# Netlify 的 200 状态 redirect 即反向代理，浏览器可跨域调用
+
+# DeepSeek AI 接口
+[[redirects]]
+  from = "/ds-api/*"
+  to = "https://api.deepseek.com/:splat"
+  status = 200
+  force = true
+
+# 百度地图地点检索（该 API 不带 CORS 头，浏览器无法直连，必须代理）
+[[redirects]]
+  from = "/bapi/*"
+  to = "https://api.map.baidu.com/:splat"
+  status = 200
+  force = true
+
+# B站视频搜索（Wbi 签名在 Function 内完成）
+[[redirects]]
+  from = "/bili-search"
+  to = "/.netlify/functions/bili-search"
+  status = 200
+  force = true
