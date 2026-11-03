@@ -13,7 +13,12 @@
   >
     <!-- 小颐形象（保持原图）+ 基础动作：点头 / 歪头 / 说话点头 / 倾听前倾 / 呼吸 -->
     <div class="xy-anim" :class="animClass">
-      <img src="assets/xiaoyi.png" alt="小颐" draggable="false" />
+      <div class="xy-pic" ref="floatPic">
+        <!-- 形象与眼球跟随合并在同一张 canvas 上绘制：
+             眼睛按「素材原图像素坐标」重绘，画面只有一份，不存在第二个图层，
+             因此任何浏览器/驱动/缩放下都不可能出现多出来的眼睛 -->
+        <canvas ref="floatCanvas" class="xy-face" width="500" height="500"></canvas>
+      </div>
     </div>
     <span v-if="recording" class="floating-badge rec">●</span>
     <span v-else-if="hasNewMsg" class="floating-badge dot"></span>
@@ -55,13 +60,13 @@
             <span class="dh-online">在线</span>
           </div>
           <div class="dh-stage">
-              <div class="xy-anim" :class="animClass" :style="{ opacity: avatarOpacity / 100 }">
-                <div class="xy-fig">
-                  <img src="assets/xiaoyi_front.png" alt="小颐数字人" draggable="false" />
-                  <!-- 讲话时的半身数字人视频：Canvas 按轮廓遮罩实时合成，与全身立绘对齐 -->
-                  <canvas v-show="speaking" ref="talkCanvas" class="xy-talk" width="636" height="606"></canvas>
-                  <video ref="talkVideo" class="xy-talk-src" src="assets/xiaoyi_talk.webm?v=2"
-                         muted loop playsinline preload="auto"></video>
+              <div class="xy-anim" :class="animClass" :style="[lookStyle, { opacity: avatarOpacity / 100 }]"
+                   title="点一下小颐，她会回应你" @click="_poke">
+                <div class="xy-fig" ref="xyFig">
+                  <!-- 立绘与眼球跟随同样合并在同一张 canvas 上，画面只有一份 -->
+                  <canvas ref="stageCanvas" class="xy-face" width="672" height="1000"></canvas>
+                  <!-- 讲话口型：在微笑线位置实时绘制张合的口腔（振幅驱动） -->
+                  <canvas v-show="speaking" ref="mouthCanvas" class="xy-mouth" width="44" height="24"></canvas>
                 </div>
               </div>
             <span v-if="speaking" class="dh-stage-tag">🔊 播报中</span>
@@ -112,10 +117,10 @@
               class="msg"
               :class="m.from === 'user' ? 'msg-user' : 'msg-bot'"
             >
-              <img v-if="m.from === 'bot'" src="assets/xiaoyi_front.png" class="msg-avatar-img" alt="小颐" />
+              <img v-if="m.from === 'bot'" :src="baseUrl + 'assets/xiaoyi_front.png?v=2'" class="msg-avatar-img" alt="小颐" />
               <div class="msg-bubble">
                 <img v-if="m.image" :src="m.image" class="msg-image" alt="上传的图片" />
-                {{ m.text }}
+                <span v-html="formatMsg(m.text)"></span>
               </div>
             </div>
           </div>
@@ -143,6 +148,7 @@
               :placeholder="pendingImage ? '已选图片，可补充描述后发送…' : (recording ? '正在聆听…' : '语音识别结果会显示在这里，也可以直接打字（Enter 发送）…')"
               @keydown.enter.exact.prevent="send"
             ></textarea>
+            <p v-if="micError" class="dh-asr-err">⚠️ {{ micError }}</p>
           </div>
 
           <!-- 图片预览区 -->
@@ -221,6 +227,31 @@
 
 <script>
 import { speakText, stopText, loadTtsConfig, saveTtsConfig, DOUBAO_VOICES } from '../utils/ttsService'
+import { getApiKey } from '../utils/userService'
+
+/* 眼球跟随：两只眼睛的矩形以「素材原图像素」定义，与页面布局/缩放完全解耦。
+   绘制时先整图铺满 canvas，再把眼睛区域按微小位移重绘一次（带羽化边），
+   整个形象只有一张 canvas，不存在第二个图层，永远不会多出眼睛。 */
+const FACE_EYES = {
+  float: {
+    src: 'assets/xiaoyi.png',
+    w: 500,
+    h: 500,
+    eyes: [
+      { cx: 228, cy: 172, w: 42, h: 30 },
+      { cx: 272.5, cy: 165, w: 42, h: 30 }
+    ]
+  },
+  stage: {
+    src: 'assets/xiaoyi_front.png?v=2',
+    w: 672,
+    h: 1000,
+    eyes: [
+      { cx: 287, cy: 324, w: 64.5, h: 48 },
+      { cx: 383.7, cy: 322, w: 64.5, h: 48 }
+    ]
+  }
+}
 
 const TOPICS = [
   { q: '失眠怎么办？', a: '【失眠调理】中医认为失眠多与心肝火旺、心脾两虚有关。\n🌙 起居：睡前1小时远离手机，用40℃温水泡脚15分钟；\n🍵 食疗：酸枣仁莲子粥、桂圆百合汤助眠；\n💆 穴位：按揉神门穴、内关穴各3分钟；\n🧘 配合「睡前正念冥想」课程效果更佳。' },
@@ -270,6 +301,7 @@ export default {
   name: 'DigitalHuman',
   data() {
     return {
+      baseUrl: process.env.BASE_URL || '/',
       expanded: false,
       topics: TOPICS,
       messages: [
@@ -281,6 +313,7 @@ export default {
       voiceOn: true,
       /* TTS 音色设置（豆包 / 浏览器回退） */
       showTtsSettings: false,
+      micError: '',
       ttsCfg: null,
       ttsForm: { appid: '', token: '', cluster: 'volcano_tts', voice: DOUBAO_VOICES[0].id },
       doubaoVoices: DOUBAO_VOICES,
@@ -294,7 +327,11 @@ export default {
       hasNewMsg: false,
       openTimer: null,
       /* 数字人动作状态 */
-      headAction: '',      // 头部动作：nod / tilt / ''
+      headAction: '',      // 小动作：nod / tilt / sway / bounce / peek / wave
+      lookX: 0,            // 视线跟随（-1~1，横向）
+      lookY: 0,            // 视线跟随（-1~1，纵向）
+      irisX: 0,            // 眼球水平位移（px，幅度很小，仅在眼睛窗口内移动）
+      irisY: 0,            // 眼球垂直位移（px）
       avatarOpacity: 100,  // 工作台左栏形象透明度（30~100）
       /* 图片上传 */
       pendingImage: '',       // base64 data URL
@@ -321,7 +358,18 @@ export default {
     expanded(val) {
       if (val) {
         this.hasNewMsg = false
-        this.$nextTick(() => this.scrollBottom())
+        this.$nextTick(() => {
+          this.scrollBottom()
+          this._ensureFace('stage')
+          this._queueFacePaint()
+        })
+      } else {
+        // 收起时重置视线，避免下次展开残留倾斜
+        this.lookX = 0
+        this.lookY = 0
+        this.irisX = 0
+        this.irisY = 0
+        this._queueFacePaint()
       }
     },
     /* 播报开始/结束：启动或停止半身讲话视频合成 */
@@ -333,16 +381,34 @@ export default {
   computed: {
     floatStyle() {
       if (!this.floatPos) return {}
-      return { left: this.floatPos.left + 'px', top: this.floatPos.top + 'px' }
+      // 自定义位置时必须同时解除 right/bottom 约束：
+      // 否则 left+right 双边同时生效，width:auto 的固定定位容器会被
+      // 压扁/拉宽（拖到屏幕边缘时形象会被挤成「纸片人」）
+      return { left: this.floatPos.left + 'px', top: this.floatPos.top + 'px', right: 'auto', bottom: 'auto' }
     },
-    /* 形象动作类：说话点头 > 录音前倾 > 随机点头/歪头 */
+    /* 形象动作类：说话点头/录音前倾优先，其余为待机小动作 */
     animClass() {
+      const a = this.headAction
+      const busy = this.speaking || this.recording
       return {
-        nod: this.headAction === 'nod' && !this.speaking && !this.recording,
-        tilt: this.headAction === 'tilt' && !this.speaking && !this.recording,
+        nod: a === 'nod' && !busy,
+        tilt: a === 'tilt' && !busy,
+        sway: a === 'sway' && !busy,
+        bounce: a === 'bounce' && !busy,
+        peek: a === 'peek' && !busy,
+        wave: a === 'wave' && !busy,
         talking: this.speaking,
         listening: this.recording
       }
+    },
+    /* 视线跟随：小颐身体朝鼠标方向轻微倾斜（仅展开态，幅度克制） */
+    lookStyle() {
+      if (!this.expanded || this.recording || this.speaking) return null
+      if (!this.lookX && !this.lookY) return null
+      const tx = this.lookX * 3
+      const ty = this.lookY * 2
+      const rot = this.lookX * 2.5
+      return { transform: `translate(${tx}px, ${ty}px) rotate(${rot}deg)` }
     },
     panelStyle() {
       if (!this.panelPos) return {}
@@ -352,6 +418,9 @@ export default {
   created() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     this.supportsSpeech = !!SR
+    // 监听全站「唤起小颐」事件（如侧边栏 AI 助手入口）
+    this._openBus = () => { if (!this.expanded) this.toggle() }
+    window.addEventListener('zy-open-xiaoyi', this._openBus)
     try {
       const saved = localStorage.getItem('zy_float_pos')
       if (saved) this.floatPos = JSON.parse(saved)
@@ -370,23 +439,90 @@ export default {
     }, 1500)
   },
   mounted() {
-    // 读取豆包 TTS 配置 + 启动随机小动作（点头/歪头）
+    // 读取豆包 TTS 配置 + 启动随机小动作（点头/歪头/摇摆/踮脚/探头）
     this.ttsCfg = loadTtsConfig()
     this._scheduleIdle()
-    this._initTalkVideo()
+    // 视线跟随鼠标（仅展开的工作台形象）
+    window.addEventListener('mousemove', this._onLookMove, { passive: true })
+    // 形象 canvas：预加载素材并首绘
+    this._ensureFace('float')
+    this._ensureFace('stage')
+    this.$nextTick(this._queueFacePaint)
   },
   beforeUnmount() {
     this.stopSpeak()
     this.stopRecord()
     this._stopTalkVideo()
+    window.removeEventListener('zy-open-xiaoyi', this._openBus)
+    window.removeEventListener('mousemove', this._onLookMove)
     if (this.openTimer) clearTimeout(this.openTimer)
     this._cleanupDragListeners()
     this._cleanupPanelDragListeners()
     // 清理数字人动作定时器
     if (this._idleTimer) clearTimeout(this._idleTimer)
     if (this._headTimer) clearTimeout(this._headTimer)
+    if (this._actRaf) cancelAnimationFrame(this._actRaf)
+    if (this._faceRaf) cancelAnimationFrame(this._faceRaf)
   },
   methods: {
+    /* ===== 形象绘制（单张 canvas，含眼球跟随） ===== */
+    /* 懒加载素材图，加载完自动重绘 */
+    _ensureFace(which) {
+      if (!this._faceImgs) this._faceImgs = {}
+      if (this._faceImgs[which]) return
+      const cfg = FACE_EYES[which]
+      const img = new Image()
+      img.onload = () => this._queueFacePaint()
+      img.src = this.baseUrl + cfg.src
+      this._faceImgs[which] = img
+    },
+    /* 合并同一帧内的多次重绘请求 */
+    _queueFacePaint() {
+      if (this._faceRaf) return
+      this._faceRaf = requestAnimationFrame(() => {
+        this._faceRaf = 0
+        this._paintFace('float')
+        if (this.expanded) this._paintFace('stage')
+      })
+    },
+    /* 绘制：整图 + 眼睛区域按 irisX/irisY 重绘（羽化边缘，静止时与整图逐像素一致） */
+    _paintFace(which) {
+      const cfg = FACE_EYES[which]
+      const canvas = which === 'float' ? this.$refs.floatCanvas : this.$refs.stageCanvas
+      const img = this._faceImgs && this._faceImgs[which]
+      if (!canvas || !img || !img.complete || !img.naturalWidth) return
+      const ctx = canvas.getContext('2d')
+      ctx.clearRect(0, 0, cfg.w, cfg.h)
+      ctx.drawImage(img, 0, 0, cfg.w, cfg.h)
+      // 位移量按「素材像素 / 实际渲染像素」换算，保证视觉幅度一致
+      const scale = cfg.w / (canvas.clientWidth || cfg.w)
+      const dx = this.irisX * scale
+      const dy = this.irisY * scale
+      if (!dx && !dy) return
+      if (!this._eyeTmp) this._eyeTmp = document.createElement('canvas')
+      const tmp = this._eyeTmp
+      const tctx = tmp.getContext('2d')
+      cfg.eyes.forEach(e => {
+        const x = e.cx - e.w / 2
+        const y = e.cy - e.h / 2
+        tmp.width = Math.ceil(e.w)
+        tmp.height = Math.ceil(e.h)
+        tctx.clearRect(0, 0, e.w, e.h)
+        // 取偏移后的眼睛区域，画进同尺寸的临时画布
+        tctx.drawImage(img, x - dx, y - dy, e.w, e.h, 0, 0, e.w, e.h)
+        // 径向羽化：边缘淡出，避免出现硬边
+        const rIn = Math.min(e.w, e.h) * 0.30
+        const rOut = Math.max(e.w, e.h) * 0.52
+        const g = tctx.createRadialGradient(e.w / 2, e.h / 2, rIn, e.w / 2, e.h / 2, rOut)
+        g.addColorStop(0, 'rgba(0,0,0,1)')
+        g.addColorStop(1, 'rgba(0,0,0,0)')
+        tctx.globalCompositeOperation = 'destination-in'
+        tctx.fillStyle = g
+        tctx.fillRect(0, 0, e.w, e.h)
+        tctx.globalCompositeOperation = 'source-over'
+        ctx.drawImage(tmp, x, y)
+      })
+    },
     toggle() {
       this.expanded = !this.expanded
       if (this.expanded) {
@@ -397,84 +533,113 @@ export default {
       }
     },
     /* ===== 数字人动作 ===== */
-    /* 初始化讲话视频资源：把黑白轮廓遮罩转换为「alpha 遮罩」（白=不透明身体，黑=透明背景） */
-    _initTalkVideo() {
-      this._talkRaf = 0
-      this._talkAmp = 0
-      this._maskCanvas = null
-      const img = new Image()
-      img.onload = () => {
-        const mc = document.createElement('canvas')
-        mc.width = img.width
-        mc.height = img.height
-        const mctx = mc.getContext('2d')
-        mctx.drawImage(img, 0, 0)
-        const imgData = mctx.getImageData(0, 0, mc.width, mc.height)
-        const px = imgData.data
-        // canvas 合成只认 alpha：把亮度直接写入 alpha 通道
-        for (let i = 0; i < px.length; i += 4) px[i + 3] = px[i]
-        mctx.putImageData(imgData, 0, 0)
-        this._maskCanvas = mc
-      }
-      img.src = 'assets/xiaoyi_talk_matte.png'
-    },
-    /* 播报中：播放半身讲话视频，按 alpha 遮罩实时合成到 canvas（背景透明，露出下层全身立绘） */
+    /* 播报中：在微笑线位置实时绘制张合的口型（振幅驱动开合），配合头部说话点头 */
     _startTalkVideo() {
-      const canvas = this.$refs.talkCanvas
-      const video = this.$refs.talkVideo
-      if (!canvas || !video) return
+      const canvas = this.$refs.mouthCanvas
+      if (!canvas) return
       const ctx = canvas.getContext('2d')
-      try { video.currentTime = 0 } catch (_) { /* noop */ }
-      const p = video.play()
-      if (p) p.catch(() => {})
+      let phase = 0
+      let smooth = 0 // 平滑后的开口量
       const loop = () => {
+        const amp = this._talkAmp || 0
+        // 音量平滑：起音快、收音慢，避免逐帧抖动；静音时自然闭嘴
+        smooth += (amp - smooth) * (amp > smooth ? 0.22 : 0.07)
+        phase += 0.09 + smooth * 0.12
+        const open = smooth * (0.75 + 0.25 * Math.sin(phase))
         ctx.clearRect(0, 0, canvas.width, canvas.height)
-        if (this._maskCanvas && video.readyState >= 2) {
-          // 语速跟随语音振幅：音量大→口型切换快（1.0~1.8 倍），静音段也保持持续张合
-          const amp = this._talkAmp || 0
-          const target = 1.0 + amp * 0.8
-          video.playbackRate += (target - video.playbackRate) * 0.2
-          ctx.drawImage(this._maskCanvas, 0, 0, canvas.width, canvas.height)
-          ctx.globalCompositeOperation = 'source-in'
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-          ctx.globalCompositeOperation = 'source-over'
+        if (open > 0.05) {
+          const cx = canvas.width / 2
+          const cy = canvas.height * 0.52
+          const rh = 1 + open * (canvas.height * 0.36) // 口腔半高
+          const rx = 11.5 + open * 2 // 口腔半宽（开大略变宽）
+          // 口腔
+          ctx.fillStyle = '#8f4a3c'
+          ctx.beginPath()
+          ctx.ellipse(cx, cy, rx, rh, 0, 0, Math.PI * 2)
+          ctx.fill()
+          // 舌头
+          ctx.fillStyle = 'rgba(210,120,105,0.75)'
+          ctx.beginPath()
+          ctx.ellipse(cx, cy + rh * 0.45, rx * 0.55, rh * 0.4, 0, 0, Math.PI * 2)
+          ctx.fill()
+          // 上唇投影线（衔接原图微笑线）
+          ctx.strokeStyle = 'rgba(96,58,48,0.65)'
+          ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.ellipse(cx, cy, rx, rh, 0, Math.PI * 1.08, Math.PI * 1.92)
+          ctx.stroke()
         }
         this._talkRaf = requestAnimationFrame(loop)
       }
       this._talkRaf = requestAnimationFrame(loop)
     },
-    /* 停止讲话视频：暂停、清空画布，恢复静态全身立绘 */
+    /* 停止播报：停循环、清空口型画布，恢复静态微笑 */
     _stopTalkVideo() {
       if (this._talkRaf) cancelAnimationFrame(this._talkRaf)
       this._talkRaf = 0
       this._talkAmp = 0
-      const video = this.$refs.talkVideo
-      if (video) {
-        video.pause()
-        video.playbackRate = 1
-      }
-      const canvas = this.$refs.talkCanvas
+      const canvas = this.$refs.mouthCanvas
       if (canvas) {
         const ctx = canvas.getContext('2d')
         ctx.clearRect(0, 0, canvas.width, canvas.height)
       }
     },
-    /* 待机小动作：每 6~11s 随机点头或歪头 */
+    /* 待机小动作：每 4~8s 随机来一下（点头/歪头/摇摆/踮脚/探头/张望） */
     _scheduleIdle() {
       this._idleTimer = setTimeout(() => {
-        if (!this.expanded && !this.speaking && !this.recording && !this.aiThinking) {
-          this.headAction = Math.random() < 0.5 ? 'nod' : 'tilt'
-          if (this._headTimer) clearTimeout(this._headTimer)
-          this._headTimer = setTimeout(() => { this.headAction = '' }, 1200)
+        if (!this.speaking && !this.recording && !this.aiThinking) {
+          const pool = ['nod', 'tilt', 'sway', 'bounce', 'peek', 'wave', 'tilt', 'sway']
+          this._playAction(pool[Math.floor(Math.random() * pool.length)])
         }
         this._scheduleIdle()
-      }, 6000 + Math.random() * 5000)
+      }, 4000 + Math.random() * 4000)
+    },
+    /* 播放一次小动作（先清空再设置，保证连续同一动作也能重播动画） */
+    _playAction(name, ms = 1300) {
+      this.headAction = ''
+      if (this._headTimer) clearTimeout(this._headTimer)
+      if (this._actRaf) cancelAnimationFrame(this._actRaf)
+      this._actRaf = requestAnimationFrame(() => { this.headAction = name })
+      this._headTimer = setTimeout(() => { this.headAction = '' }, ms)
     },
     /* 点头一次（点击回应） */
     _nodOnce() {
-      this.headAction = 'nod'
-      if (this._headTimer) clearTimeout(this._headTimer)
-      this._headTimer = setTimeout(() => { this.headAction = '' }, 1000)
+      this._playAction('nod', 1000)
+    },
+    /* 点一下形象：随机俏皮小动作回应 */
+    _poke() {
+      if (this.speaking || this.recording || this.aiThinking) return
+      const pool = ['wave', 'bounce', 'tilt', 'peek']
+      this._playAction(pool[Math.floor(Math.random() * pool.length)], 1400)
+    },
+    /* 视线跟随：按鼠标相对小颐的位置，轻微倾斜身体 */
+    _onLookMove(e) {
+      if (this.recording || this.speaking) return
+      const now = Date.now()
+      if (now - (this._lookTs || 0) < 70) return
+      // 展开态用工作台立绘，收起态用右下角悬浮头像（都取实际画面盒，避免留白偏差）
+      const el = this.expanded ? this.$refs.xyFig : this.$refs.floatPic
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      if (!r.width) return
+      this._lookTs = now
+      // 眼部中心：立绘约在 33% 高度，悬浮头像约在 34% 高度
+      const cx = r.left + r.width / 2
+      const cy = r.top + r.height * (this.expanded ? 0.33 : 0.34)
+      const dx = e.clientX - cx
+      const dy = e.clientY - cy
+      const len = Math.sqrt(dx * dx + dy * dy) || 1
+      // 眼球沿鼠标方向轻微位移；鼠标离开小颐身边后回正，避免一直保持侧视
+      const near = Math.max(0, Math.min(1, 1 - len / 240))
+      const max = 1.2 * near
+      this.irisX = Math.round((dx / len) * max * 10) / 10
+      this.irisY = Math.round((dy / len) * max * 0.4 * 10) / 10
+      this._queueFacePaint()
+      if (!this.expanded) return
+      const nx = dx / Math.max(180, window.innerWidth / 5)
+      const ny = dy / Math.max(180, window.innerHeight / 5)
+      this.lookX = Math.max(-1, Math.min(1, nx))
+      this.lookY = Math.max(-1, Math.min(1, ny))
     },
     /* 打招呼：点头 + 播报欢迎语（避免重复刷屏） */
     greet() {
@@ -769,6 +934,15 @@ export default {
       return ''
     },
 
+    /* 消息文本渲染：先转义 HTML，再支持 **加粗**，避免直接显示星号 */
+    formatMsg(text) {
+      const esc = String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+      return esc.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    },
+
     /* 调用智谱 —— 有图时 glm-4.6v-flash 优先，无图时 glm-4.7 优先 */
     async aiReply(userText, imageUrl = '') {
       this.aiThinking = true
@@ -787,7 +961,7 @@ export default {
             content: m.text || ''
           }
         })
-      const API_KEY = 'sk-5f223cfad7fa435da12b65e7d109e715'
+      const API_KEY = getApiKey()
       const buildHeaders = () => ({
         'Content-Type': 'application/json',
         Authorization: 'Bearer ' + API_KEY
@@ -821,16 +995,16 @@ export default {
             ...(userText ? [{ type: 'text', text: userText }] : []),
             { type: 'image_url', image_url: { url: imageUrl } }
           ]
-          currentSystem = '你是「小颐」，一位专业的中医养生顾问。用户可能上传了一张图片（如舌苔、皮肤、食物、场景等），请结合图片内容和用户问题进行中医角度的分析与建议。要求：\n1. 先简要描述你看到的图片内容\n2. 结合中医理论给出针对性的养生建议\n3. 包含食疗、穴位、起居、运动等建议\n4. 用 emoji 和换行让排版清晰\n5. 回答控制在300字以内'
+          currentSystem = '你是「小颐」，一位亲切的中医养生顾问，像朋友聊天一样回答，不要像 AI 助手。用户可能上传了一张图片（如舌苔、皮肤、食物、场景等），请结合图片内容和用户问题做分析。要求：\n1. 先用一句自然口语说说你看到的画面，再聊健康线索，语气温暖、多用"你""咱们"\n2. 建议要分点列出，覆盖饮食、穴位、作息、运动等方面，共 6-8 条\n3. 每条建议单独一行，开头配一个贴切的 emoji，写明具体怎么做和为什么，简洁实用\n4. 整体多用 emoji（约 8-10 个），让语气活泼可亲，但不要堆砌\n5. 禁止使用 **、#、markdown 等标记符号，不要写"首先/其次/综上所述"这类套话\n6. 回答控制在 400 字左右'
         } else if (!vision && hasImage) {
           // 纯文本模型 + 当前有图 → string content（把图片描述成占位，模型看不到图但不会 400）
           const desc = userText ? userText + '（用户同时上传了一张图片，我无法直接看到图片内容，请基于文本给出建议，并提醒用户描述图片细节或换个时间再试）' : '（用户上传了一张图片，但我目前无法直接看图，请让用户描述图片内容，我再给出建议）'
           currentUserContent = desc
-          currentSystem = '你是「小颐」，一位专业的中医养生顾问。请用亲切温和的语气回答用户的养生健康问题。要求：\n1. 结合中医理论与现代健康知识\n2. 回答简洁实用，用 emoji 和换行让排版清晰\n3. 包含食疗建议、穴位按摩、起居调养、运动建议等\n4. 回答控制在200字以内\n5. 如果用户问的不是养生健康问题，温和地引导回养生话题\n6. 提到具体穴位时请标注大致位置'
+          currentSystem = '你是「小颐」，一位亲切的中医养生顾问，像朋友聊天一样回答，不要像 AI 助手。请用温暖自然的口语解答用户的养生问题。要求：\n1. 先回应对方的感受，再给建议，多用"你""咱们"，避免"首先/其次/综上所述/建议您"这类套话\n2. 建议要分点列出，覆盖饮食、穴位、作息、运动等方面，共 6-8 条\n3. 每条建议单独一行，开头配一个贴切的 emoji，写明具体怎么做和为什么，简洁实用\n4. 整体多用 emoji（约 8-10 个），让语气活泼可亲，但不要堆砌\n5. 禁止使用 **、#、markdown 等标记符号，不要输出编号小标题\n6. 回答控制在 350 字左右\n7. 如果用户问的不是养生健康问题，温和地引导回养生话题\n8. 提到具体穴位时顺带说下大致位置'
         } else {
           // 纯文本模型 + 纯文本 → string content（普通情况）
           currentUserContent = userText || ''
-          currentSystem = '你是「小颐」，一位专业的中医养生顾问。请用亲切温和的语气回答用户的养生健康问题。要求：\n1. 结合中医理论与现代健康知识\n2. 回答简洁实用，用 emoji 和换行让排版清晰\n3. 包含食疗建议、穴位按摩、起居调养、运动建议等\n4. 回答控制在200字以内\n5. 如果用户问的不是养生健康问题，温和地引导回养生话题\n6. 提到具体穴位时请标注大致位置'
+          currentSystem = '你是「小颐」，一位亲切的中医养生顾问，像朋友聊天一样回答，不要像 AI 助手。请用温暖自然的口语解答用户的养生问题。要求：\n1. 先回应对方的感受，再给建议，多用"你""咱们"，避免"首先/其次/综上所述/建议您"这类套话\n2. 建议要分点列出，覆盖饮食、穴位、作息、运动等方面，共 6-8 条\n3. 每条建议单独一行，开头配一个贴切的 emoji，写明具体怎么做和为什么，简洁实用\n4. 整体多用 emoji（约 8-10 个），让语气活泼可亲，但不要堆砌\n5. 禁止使用 **、#、markdown 等标记符号，不要输出编号小标题\n6. 回答控制在 350 字左右\n7. 如果用户问的不是养生健康问题，温和地引导回养生话题\n8. 提到具体穴位时顺带说下大致位置'
         }
         const messages = [
           { role: 'system', content: currentSystem },
@@ -841,7 +1015,7 @@ export default {
           model,
           messages,
           temperature: 0.7,
-          max_tokens: 800,
+          max_tokens: hasImage ? 1600 : 1200,
           stream: false
         }
         for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -985,6 +1159,7 @@ export default {
     },
     startRecord() {
       try {
+        this.micError = ''
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition
         const rec = new SR()
         rec.lang = 'zh-CN'
@@ -1010,8 +1185,15 @@ export default {
           }
         }
         rec.onerror = (e) => {
-          if (e.error === 'not-allowed') {
-            alert('麦克风权限被拒绝。\n请点击浏览器地址栏的锁图标 → 允许麦克风权限。')
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            this.micError = '麦克风权限被限制：点击地址栏的锁图标 → 网站设置 → 麦克风改为“允许”，然后刷新页面重试。'
+            this.recording = false
+            this.keepListening = false
+            try { rec.stop() } catch (_) { /* noop */ }
+          } else if (e.error === 'audio-capture') {
+            this.micError = '未检测到可用的麦克风设备，请检查设备连接后再试。'
+            this.recording = false
+            this.keepListening = false
           }
         }
         rec.onend = () => {
@@ -1089,7 +1271,7 @@ export default {
   border: none;
   padding: 0;
   cursor: grab;
-  z-index: 300;
+  z-index: 100000;
   box-shadow: none;
   overflow: visible;
   transition: transform 0.18s;
@@ -1100,11 +1282,13 @@ export default {
 .floating-avatar.dragging {
   cursor: grabbing;
   transition: none;
-  z-index: 9999;
+  z-index: 100001;
 }
+/* 形象尺寸恒定：禁止 flex 收缩把头像/画布挤扁（纸片人问题的第二道保险） */
 .xy-anim {
   height: 100%;
   width: auto;
+  flex: none;
   transform-origin: 50% 92%;
   line-height: 0;
 }
@@ -1122,24 +1306,56 @@ export default {
   0%, 100% { transform: translateY(0); }
   50%      { transform: translateY(3px); }
 }
-/* 点头 / 歪头 / 说话点头 / 倾听前倾（作用于整体，不改形象） */
+/* 点头 / 歪头 / 摇摆 / 踮脚 / 探头 / 张望（作用于整体，不改形象） */
 .xy-anim.nod { animation: xy-nod 0.9s ease-in-out 1; }
 .xy-anim.tilt { animation: xy-tilt 1.1s ease-in-out 1; }
-.xy-anim.talking { animation: xy-nod-slow 1.5s ease-in-out infinite; }
+.xy-anim.sway { animation: xy-sway 1.8s ease-in-out 1; }
+.xy-anim.bounce { animation: xy-hop 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 1; }
+.xy-anim.peek { animation: xy-peek 1.2s ease-in-out 1; }
+.xy-anim.wave { animation: xy-wave 1.3s ease-in-out 1; }
+.xy-anim.talking { animation: xy-talk 1.8s ease-in-out infinite; }
 .xy-anim.listening { transform: rotate(5deg); }
 @keyframes xy-nod {
   0%, 100% { transform: rotate(0) translateY(0); }
   30%      { transform: rotate(3deg) translateY(3px); }
   65%      { transform: rotate(-1.5deg) translateY(0); }
 }
-@keyframes xy-nod-slow {
-  0%, 100% { transform: rotate(0) translateY(0); }
-  40%      { transform: rotate(2.5deg) translateY(2px); }
-  70%      { transform: rotate(-1deg) translateY(0); }
-}
 @keyframes xy-tilt {
   0%, 100% { transform: rotate(0); }
   45%      { transform: rotate(7deg); }
+}
+/* 待机左右轻摆：重心在两脚间转移 */
+@keyframes xy-sway {
+  0%, 100% { transform: rotate(0) translateX(0); }
+  30%      { transform: rotate(-2.6deg) translateX(-3px); }
+  70%      { transform: rotate(2.6deg) translateX(3px); }
+}
+/* 踮脚轻跳 */
+@keyframes xy-hop {
+  0%, 100% { transform: translateY(0) scale(1); }
+  35%      { transform: translateY(-6px) scale(1.015); }
+  60%      { transform: translateY(0) scale(0.995); }
+}
+/* 探头凑近看一下 */
+@keyframes xy-peek {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  40%      { transform: translateY(4px) rotate(-3deg); }
+  70%      { transform: translateY(2px) rotate(-1deg); }
+}
+/* 左右张望 / 挥手 */
+@keyframes xy-wave {
+  0%, 100% { transform: rotate(0); }
+  20%      { transform: rotate(-5deg); }
+  40%      { transform: rotate(4deg); }
+  60%      { transform: rotate(-4deg); }
+  80%      { transform: rotate(2deg); }
+}
+/* 说话：小幅点头 + 左右轻摆，节奏比静音时更活泼 */
+@keyframes xy-talk {
+  0%, 100% { transform: rotate(0) translate(0, 0); }
+  25%      { transform: rotate(1.8deg) translate(1.5px, 2px); }
+  55%      { transform: rotate(-1.2deg) translate(-1.5px, 0.5px); }
+  80%      { transform: rotate(0.6deg) translate(0.5px, 1.5px); }
 }
 /* 录音声波指示条 */
 .xy-soundbars {
@@ -1208,6 +1424,27 @@ export default {
   30%      { transform: scale(1.12); }
   60%      { transform: scale(0.95); }
 }
+/* 悬浮头像：用与图片等宽的方形容器包住形象，保证眼球贴片百分比坐标与画面一致 */
+.floating-avatar .xy-anim {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.floating-avatar .xy-pic {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  flex: none;
+  animation: xy-breathe 3.4s ease-in-out infinite;
+}
+.floating-avatar .xy-pic canvas.xy-face {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
 .floating-badge {
   position: absolute;
   top: 2px;
@@ -1239,7 +1476,7 @@ export default {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  z-index: 300;
+  z-index: 100000;
 }
 .chat-fade-enter-active,
 .chat-fade-leave-active {
@@ -1368,34 +1605,24 @@ export default {
   line-height: 0;
   animation: xy-breathe 3.4s ease-in-out infinite;
 }
-.dh-stage .xy-fig img {
+.dh-stage .xy-fig canvas.xy-face {
   display: block;
   width: auto;
   height: auto;
   max-width: 196px;
   max-height: 52vh;
   pointer-events: none;
-  animation: none;
+  -webkit-user-drag: none;
 }
-/* 讲话视频合成层：按「头顶对齐」参数定位（相对 PNG 渲染盒）
-   left -3.13% / top 2.88% / 宽 104.8% / 高 67.1%，裙摆区由下层立绘补全 */
-.dh-stage .xy-fig .xy-talk {
+/* 讲话口型层：定位在微笑线中心（像素扫描 x≈50.1% / y≈37.05%），振幅驱动张合 */
+.dh-stage .xy-fig .xy-mouth {
   position: absolute;
-  left: -3.13%;
-  top: 2.88%;
-  width: 104.8%;
-  height: 67.1%;
+  left: 47.1%;
+  top: 35.9%;
+  width: 6%;
+  height: 2.2%;
   pointer-events: none;
   z-index: 2;
-}
-/* 隐藏的视频源：仍需参与解码供 canvas 绘制 */
-.dh-stage .xy-fig .xy-talk-src {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-  z-index: -1;
 }
 .dh-stage-tag {
   position: absolute;
@@ -1687,6 +1914,13 @@ export default {
   border-color: #c0392b;
   box-shadow: 0 0 0 3px rgba(192, 57, 43, 0.12);
 }
+.dh-asr-err {
+  margin: 0;
+  padding: 0 12px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c0392b;
+}
 .dh-asr-head {
   display: flex;
   align-items: center;
@@ -1784,7 +2018,7 @@ export default {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 400;
+  z-index: 100010;
 }
 .tts-pop {
   width: 290px;
@@ -1899,6 +2133,7 @@ export default {
     height: 216px;
     max-height: 220px;
   }
-  .xy-anim img { max-width: 184px; }
+  .xy-anim img, .xy-anim canvas.xy-face { max-width: 184px; }
+  .floating-avatar .xy-pic { width: 184px; height: 184px; }
 }
 </style>

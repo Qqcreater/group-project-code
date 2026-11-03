@@ -1,8 +1,13 @@
 <template>
   <div class="module">
     <div class="module-head">
-      <h2>🧘 养生课程内容</h2>
-      <p>跟练B站真实教学视频，章节与视频时间轴一一对应。</p>
+      <div class="head-row">
+        <div>
+          <h2>🧘 养生课程内容</h2>
+          <p>跟练B站真实教学视频，章节与视频时间轴一一对应。</p>
+        </div>
+        <button class="create-btn" @click="openCreate">➕ 自建课程</button>
+      </div>
     </div>
 
     <div class="stats">
@@ -37,8 +42,11 @@
         <div class="course-cover">{{ c.emoji }}</div>
         <div class="course-main">
           <div class="course-top">
-            <h3>{{ c.title }}</h3>
-            <span class="level" :class="c.level">{{ c.level }}</span>
+            <h3>{{ c.title }}<span v-if="c.aiRec" class="ai-tag">✨ 自主添加</span><span v-else-if="c.isCustom" class="custom-tag">自建</span></h3>
+            <span class="top-right">
+              <span class="level" :class="c.level">{{ c.level }}</span>
+              <button v-if="c.isCustom" class="del-btn" title="删除该自建课程" @click="deleteCourse(c)">✕</button>
+            </span>
           </div>
           <p class="course-sub">{{ c.teacher }} · 视频 {{ formatTime(c.videoSec) }} · {{ c.cat }} · 已完成 {{ doneCount(c) }}/{{ c.sections.length }} 章</p>
           <p class="course-desc">{{ c.desc }}</p>
@@ -64,9 +72,9 @@
           <button class="close-btn" @click="closeVideo">✕</button>
         </div>
 
-        <!-- B站官方嵌入播放器（对应真实锻炼教学视频） -->
+        <!-- B站官方嵌入播放器（对应真实锻炼教学视频）；AI 推荐课程无固定视频时展示搜索引导 -->
         <div class="video-player">
-          <div class="bilibili-wrap">
+          <div v-if="playingCourse.bvid" class="bilibili-wrap">
             <iframe
               :src="bilibiliEmbedUrl"
               class="video-iframe"
@@ -79,9 +87,21 @@
               :key="playingCourse.id"
             ></iframe>
           </div>
+          <div v-else class="bilibili-wrap ai-video-guide">
+            <div class="guide-icon">🔍</div>
+            <p class="guide-title">这是 AI 根据你的健康分析定制的课程，还没有绑定固定视频</p>
+            <p class="guide-desc">点击下方按钮去哔哩哔哩搜索跟练视频，任选一个喜欢的跟着练即可；进度会正常记录。</p>
+            <a
+              class="guide-btn"
+              :href="'https://search.bilibili.com/all?keyword=' + encodeURIComponent(playingCourse.searchKw || playingCourse.title)"
+              target="_blank"
+              rel="noopener"
+            >🔍 去 B站搜索「{{ playingCourse.searchKw || playingCourse.title }}」</a>
+          </div>
           <div class="source-tip">
             <span>📺 视频源：哔哩哔哩 · {{ playingCourse.teacher }} · 全片 {{ formatTime(playingCourse.videoSec) }}</span>
             <a
+              v-if="playingCourse.bvid"
               :href="'https://www.bilibili.com/video/' + playingCourse.bvid"
               target="_blank"
               rel="noopener"
@@ -127,11 +147,83 @@
         </div>
       </div>
     </div>
+
+    <!-- 自建课程弹窗 -->
+    <div v-if="showCreate" class="modal-mask" @click.self="closeCreate">
+      <div class="modal create-modal">
+        <div class="modal-head">
+          <h3>➕ 自建课程</h3>
+          <button class="close-btn" @click="closeCreate">✕</button>
+        </div>
+        <div class="form">
+          <label>课程标题 <i>*</i></label>
+          <input v-model.trim="form.title" maxlength="30" placeholder="如：办公室八段锦午间跟练" />
+
+          <label>B站视频链接或 BV 号 <i>*</i></label>
+          <input v-model.trim="form.bvidInput" placeholder="https://www.bilibili.com/video/BV… 或 BV1h5EX6EEjZ" />
+
+          <div class="form-row">
+            <div>
+              <label>视频时长（分钟）<i>*</i></label>
+              <input v-model.number="form.minutes" type="number" min="1" max="240" />
+            </div>
+            <div>
+              <label>章节数（自动均分时长）</label>
+              <input v-model.number="form.sectionCount" type="number" min="1" max="8" />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>分类</label>
+              <input v-model.trim="form.cat" list="catOptions" placeholder="选择或输入新分类" />
+              <datalist id="catOptions">
+                <option v-for="c in catOptions" :key="c" :value="c" />
+              </datalist>
+            </div>
+            <div>
+              <label>难度</label>
+              <select v-model="form.level">
+                <option value="入门">入门</option>
+                <option value="进阶">进阶</option>
+              </select>
+            </div>
+          </div>
+
+          <label>讲师 / UP主（选填）</label>
+          <input v-model.trim="form.teacher" placeholder="默认：自建课程" />
+
+          <label>课程简介（选填）</label>
+          <textarea v-model.trim="form.desc" rows="2" maxlength="120" placeholder="简单介绍一下这门课…"></textarea>
+
+          <label>封面图标</label>
+          <div class="emoji-row">
+            <button
+              v-for="e in emojis"
+              :key="e"
+              type="button"
+              class="emoji-btn"
+              :class="{ sel: form.emoji === e }"
+              @click="form.emoji = e"
+            >{{ e }}</button>
+          </div>
+
+          <p v-if="formErr" class="form-err">{{ formErr }}</p>
+          <div class="form-foot">
+            <button class="btn" @click="closeCreate">取消</button>
+            <button class="btn primary" :disabled="saving" @click="submitCreate">{{ saving ? '创建中…' : '创建课程' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script>
+import { BUILT_IN_COURSES, COURSE_JUMP_KEY, loadAiCourses } from '@/utils/courseLibrary'
+
 const STORAGE_KEY = 'zy_courses_progress'
+const CUSTOM_KEY = 'zy_custom_courses'
 
 export default {
   name: 'HealthCourses',
@@ -142,136 +234,30 @@ export default {
       watchTime: 0,
       watchTimer: null,
       playingCourse: null,
-      /* 章节时间 = B站视频真实时间轴（videoSec 为接口返回的真实时长） */
-      courses: [
-        {
-          id: 1,
-          title: '八段锦入门十二式',
-          emoji: '🧎',
-          cat: '八段锦',
-          teacher: '余小鱼鱼鱼（北体冠军示范）',
-          level: '入门',
-          bvid: 'BV1h5EX6EEjZ',
-          videoSec: 736,
-          desc: '国家体育总局推广版八段锦，1080P高清，北体武术冠军标准示范，带呼吸口令与完整跟练。坚持练习可调气血、通经络、养五脏。',
-          sections: [
-            { name: '起势与热身', start: 0, end: 120 },
-            { name: '八段锦完整跟练', start: 120, end: 660 },
-            { name: '收功调息', start: 660, end: 736 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        },
-        {
-          id: 2,
-          title: '清晨太极云手练习',
-          emoji: '🌅',
-          cat: '太极',
-          teacher: '陈-运太极',
-          level: '入门',
-          bvid: 'BV1QzcvziETh',
-          videoSec: 185,
-          desc: '42式太极拳云手动作分解精讲，以腰为轴、节节贯穿、连贯圆活。3分钟快速掌握云手要领，晨起练一遍激活周身气血。',
-          sections: [
-            { name: '云手动作分解', start: 0, end: 120 },
-            { name: '完整演示', start: 120, end: 185 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        },
-        {
-          id: 3,
-          title: '睡前正念冥想引导',
-          emoji: '🌙',
-          cat: '冥想',
-          teacher: '小慈',
-          level: '入门',
-          bvid: 'BV1E4jF6kEDC',
-          videoSec: 1848,
-          desc: '身体扫描·深度修复系列：30分钟渐进式肌肉放松，从脚趾到眉心依次绷紧再松开，疗愈焦虑失眠。建议佩戴耳机，睡前练习。',
-          sections: [
-            { name: '引导入静', start: 0, end: 900 },
-            { name: '渐进式肌肉放松', start: 900, end: 1620 },
-            { name: '自然入睡', start: 1620, end: 1848 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        },
-        {
-          id: 4,
-          title: '办公室肩颈舒缓瑜伽',
-          emoji: '🧘‍♀️',
-          cat: '瑜伽',
-          teacher: 'Kassandra',
-          level: '入门',
-          bvid: 'BV1FbLT6hExA',
-          videoSec: 872,
-          desc: 'Kassandra 15分钟颈肩释放瑜伽：专注颈部与肩部的流动练习，缓解久坐导致的疼痛、僵硬与紧张。适合新手，无需任何辅具。',
-          sections: [
-            { name: '唤醒热身', start: 0, end: 240 },
-            { name: '颈肩深度拉伸', start: 240, end: 720 },
-            { name: '放松收束', start: 720, end: 872 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        },
-        {
-          id: 5,
-          title: '中医四季养生·黄帝内经',
-          emoji: '🥗',
-          cat: '营养',
-          teacher: '倪海厦',
-          level: '进阶',
-          bvid: 'BV1u4Ew6MEgU',
-          videoSec: 1827,
-          desc: '倪海厦详解《黄帝内经·四气调神大论》：春生、夏长、秋收、冬藏的四季养生操作方法，长夏养脾，阴阳平衡，圣人不治已病治未病。章节时间与视频官方时间轴一致。',
-          sections: [
-            { name: '长寿的终极秘密', start: 0, end: 260 },
-            { name: '春季养生', start: 260, end: 530 },
-            { name: '夏季养生', start: 530, end: 735 },
-            { name: '秋季养生', start: 735, end: 940 },
-            { name: '冬季养生', start: 940, end: 1110 },
-            { name: '长夏与脾胃', start: 1110, end: 1270 },
-            { name: '阴阳平衡', start: 1270, end: 1500 },
-            { name: '治未病智慧', start: 1500, end: 1827 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        },
-        {
-          id: 6,
-          title: '五行经络拍打操',
-          emoji: '✋',
-          cat: '八段锦',
-          teacher: '会发光的猫儿',
-          level: '入门',
-          bvid: 'BV1EHxyzTEuc',
-          videoSec: 293,
-          desc: '5分钟拍八虚完整跟练：空心掌拍打两肘、两腋、两髀、两腘，每天拍一拍，促进气血流通、疏通经络。晨起或睡前各做一遍。',
-          sections: [
-            { name: '手法讲解', start: 0, end: 90 },
-            { name: '完整跟练', start: 90, end: 260 },
-            { name: '收势整理', start: 260, end: 293 }
-          ],
-          enrolled: false,
-          progressSec: 0,
-          celebrated: false,
-          lastStudy: ''
-        }
-      ]
+      /* 自建课程 */
+      customCourses: [],
+      showCreate: false,
+      formErr: '',
+      saving: false,
+      emojis: ['🎬', '🧎', '🌅', '🌙', '🧘‍♀️', '🥗', '✋', '🥊', '🏃', '💆'],
+      form: {
+        title: '', bvidInput: '', minutes: 5, sectionCount: 3,
+        cat: '', level: '入门', teacher: '', desc: '', emoji: '🎬'
+      },
+      /* 内置课程数据来自共享库 courseLibrary.js（含关键词标签，供自测推荐匹配） */
+      courses: BUILT_IN_COURSES.map((c) => ({
+        ...c,
+        enrolled: false,
+        progressSec: 0,
+        celebrated: false,
+        lastStudy: ''
+      }))
     }
   },
   computed: {
+    catOptions() {
+      return this.categories.filter((c) => c !== '全部')
+    },
     filtered() {
       if (this.activeCat === '全部') return this.courses
       return this.courses.filter((c) => c.cat === this.activeCat)
@@ -302,12 +288,183 @@ export default {
     }
   },
   created() {
+    this.loadCustom()
+    this.restoreProgress()
+    // 健康自测推荐课程跳转：自动打开对应课程视频
+    try {
+      const jumpId = localStorage.getItem(COURSE_JUMP_KEY)
+      if (jumpId) {
+        localStorage.removeItem(COURSE_JUMP_KEY)
+        const target = this.courses.find((c) => String(c.id) === jumpId)
+        if (target) {
+          this.$nextTick(() => this.openVideo(target))
+        }
+      }
+    } catch (_) { /* noop */ }
+  },
+  /* keep-alive 缓存下，每次切回本页都会触发：重新同步 AI 定制课程，
+   * 保证在自测页添加课程后切回来能立即看到（created 只会跑一次） */
+  activated() {
+    this.syncAiCourses()
     this.restoreProgress()
   },
   beforeUnmount() {
     this.stopWatch()
   },
   methods: {
+    /* ===== 自建课程 ===== */
+    /* 同步 AI 定制课程（zy_ai_courses）：先清掉已加载的 AI 课程再重建，可重复调用 */
+    syncAiCourses() {
+      try {
+        this.courses = this.courses.filter((c) => !c.aiRec)
+        this.customCourses = this.customCourses.filter((c) => !c.aiRec)
+        const aiList = loadAiCourses().filter((def) => def && def.title).map((def) => ({
+          emoji: '✨',
+          cat: '营养',
+          teacher: 'AI 智能推荐',
+          level: '入门',
+          desc: '',
+          bvid: '',
+          videoSec: 600,
+          sections: [{ name: '完整学习', start: 0, end: 600 }],
+          ...def,
+          isCustom: true,
+          aiRec: true,
+          enrolled: false,
+          progressSec: 0,
+          celebrated: false,
+          lastStudy: ''
+        }))
+        aiList.forEach((course) => {
+          this.customCourses.push(course)
+          if (course.cat && !this.categories.includes(course.cat)) this.categories.push(course.cat)
+        })
+        if (aiList.length) this.courses.unshift(...aiList.slice().reverse())
+      } catch (e) {
+        /* 忽略 AI 课程加载错误 */
+      }
+    },
+    loadCustom() {
+      this.syncAiCourses()
+      try {
+        const saved = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]')
+        if (!Array.isArray(saved)) return
+        saved.forEach((def) => {
+          if (!def || !def.bvid) return
+          const course = {
+            emoji: '🎬',
+            cat: '营养',
+            teacher: '自建课程',
+            level: '入门',
+            desc: '',
+            ...def,
+            isCustom: true,
+            enrolled: false,
+            progressSec: 0,
+            celebrated: false,
+            lastStudy: ''
+          }
+          this.customCourses.push(course)
+          this.courses.push(course)
+          if (course.cat && !this.categories.includes(course.cat)) this.categories.push(course.cat)
+        })
+      } catch (e) {
+        /* 忽略本地存储解析错误 */
+      }
+    },
+    saveCustom() {
+      try {
+        const list = this.customCourses
+          .filter((c) => !c.aiRec) // AI 推荐课程有独立存储，不写入自建课程库
+          .map((c) => ({
+            id: c.id, title: c.title, emoji: c.emoji, cat: c.cat, teacher: c.teacher,
+            level: c.level, bvid: c.bvid, videoSec: c.videoSec, desc: c.desc,
+            sections: c.sections, isCustom: true
+          }))
+        localStorage.setItem(CUSTOM_KEY, JSON.stringify(list))
+      } catch (e) {
+        /* 忽略本地存储写入错误 */
+      }
+    },
+    /* 从 AI 推荐课程存储中删除 */
+    removeAiCourse(id) {
+      try {
+        const list = loadAiCourses().filter((c) => c.id !== id)
+        localStorage.setItem('zy_ai_courses', JSON.stringify(list))
+      } catch (e) {
+        /* 忽略本地存储写入错误 */
+      }
+    },
+    openCreate() {
+      this.form = { title: '', bvidInput: '', minutes: 5, sectionCount: 3, cat: '', level: '入门', teacher: '', desc: '', emoji: '🎬' }
+      this.formErr = ''
+      this.showCreate = true
+    },
+    closeCreate() {
+      this.showCreate = false
+    },
+    extractBvid(input) {
+      const m = String(input || '').match(/BV[0-9A-Za-z]{10}/)
+      return m ? m[0] : ''
+    },
+    submitCreate() {
+      const f = this.form
+      if (!f.title) { this.formErr = '请填写课程标题'; return }
+      const bvid = this.extractBvid(f.bvidInput)
+      if (!bvid) { this.formErr = 'B站链接无效：需要包含 BV 号（BV 开头的 12 位字符）'; return }
+      const totalSec = Math.round((f.minutes || 0) * 60)
+      if (!totalSec || totalSec < 30) { this.formErr = '请填写有效视频时长（至少 1 分钟）'; return }
+      const n = Math.max(1, Math.min(8, f.sectionCount || 1))
+      // 按章节数自动均分视频时长
+      const per = Math.floor(totalSec / n)
+      const sections = []
+      for (let i = 0; i < n; i++) {
+        const start = i * per
+        const end = i === n - 1 ? totalSec : (i + 1) * per
+        sections.push({ name: `第${i + 1}节 跟练`, start, end })
+      }
+      const course = {
+        id: 'c' + Date.now(),
+        title: f.title,
+        emoji: f.emoji || '🎬',
+        cat: f.cat || '营养',
+        teacher: f.teacher || '自建课程',
+        level: f.level || '入门',
+        bvid,
+        videoSec: totalSec,
+        desc: f.desc || `自建课程：${f.title}。B站跟练视频，共 ${n} 个章节。`,
+        sections,
+        enrolled: false,
+        progressSec: 0,
+        celebrated: false,
+        lastStudy: '',
+        isCustom: true
+      }
+      this.customCourses.push(course)
+      this.courses.push(course)
+      if (course.cat && !this.categories.includes(course.cat)) this.categories.push(course.cat)
+      this.saveCustom()
+      this.showCreate = false
+      this.activeCat = '全部'
+    },
+    deleteCourse(c) {
+      const tip = c.aiRec ? `确定删除自主添加的 AI 定制课程《${c.title}》？\n学习进度将一并清除。` : `确定删除自建课程《${c.title}》？\n学习进度将一并清除，内置课程不受影响。`
+      if (!confirm(tip)) return
+      this.courses = this.courses.filter((x) => x.id !== c.id)
+      this.customCourses = this.customCourses.filter((x) => x.id !== c.id)
+      if (c.aiRec) this.removeAiCourse(c.id)
+      this.saveCustom()
+      // 清除该课程的学习进度
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+        if (saved[c.id]) {
+          delete saved[c.id]
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(saved))
+        }
+      } catch (e) {
+        /* 忽略本地存储错误 */
+      }
+    },
     restoreProgress() {
       try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
@@ -424,6 +581,34 @@ export default {
   color: #7a8a82;
   font-size: 14px;
 }
+.head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.head-row p {
+  margin-bottom: 0;
+}
+.create-btn {
+  flex-shrink: 0;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #35705f, #2f5d50);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(47, 93, 80, 0.25);
+  transition: opacity 0.2s, transform 0.1s;
+}
+.create-btn:hover {
+  opacity: 0.92;
+}
+.create-btn:active {
+  transform: scale(0.97);
+}
 .stats {
   display: flex;
   gap: 14px;
@@ -504,6 +689,91 @@ export default {
   margin: 0;
   font-size: 16px;
   color: #2f5d50;
+}
+.custom-tag {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b9770e;
+  background: #fbe9d0;
+  border-radius: 8px;
+  padding: 2px 7px;
+  vertical-align: 2px;
+}
+/* AI 推荐课程标记 */
+.ai-tag {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #3c6656;
+  background: #dff0e7;
+  border: 1px solid #9dc4b2;
+  border-radius: 8px;
+  padding: 2px 7px;
+  vertical-align: 2px;
+}
+/* AI 课程无固定视频时的搜索引导 */
+.ai-video-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 34px 24px;
+  background: linear-gradient(135deg, #f4faf6, #e8f3ec);
+  min-height: 240px;
+}
+.guide-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+.guide-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #2f5d50;
+  margin: 0 0 8px;
+}
+.guide-desc {
+  font-size: 13px;
+  color: #6d8378;
+  line-height: 1.7;
+  margin: 0 0 16px;
+  max-width: 420px;
+}
+.guide-btn {
+  display: inline-block;
+  background: #4a7a68;
+  color: #fff;
+  font-size: 14px;
+  padding: 10px 20px;
+  border-radius: 22px;
+  text-decoration: none;
+  transition: background 0.2s;
+}
+.guide-btn:hover {
+  background: #3c6656;
+}
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.del-btn {
+  border: none;
+  background: #f3e5e4;
+  color: #c0564f;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.2s;
+}
+.del-btn:hover {
+  background: #c0564f;
+  color: #fff;
 }
 .level {
   font-size: 11px;
@@ -590,6 +860,105 @@ export default {
   max-height: 92vh;
   overflow-y: auto;
   padding: 18px;
+}
+/* 自建课程表单弹窗 */
+.create-modal {
+  width: 480px;
+  padding: 22px 24px;
+}
+.form label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2f5d50;
+  margin: 12px 0 6px;
+}
+.form label i {
+  color: #c0564f;
+  font-style: normal;
+}
+.form input,
+.form textarea,
+.form select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid #d7e3dc;
+  border-radius: 9px;
+  background: #fff;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  color: #2c3e50;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s;
+  resize: vertical;
+}
+.form input:focus,
+.form textarea:focus,
+.form select:focus {
+  border-color: #7fc8a9;
+}
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+.form-row > div {
+  flex: 1;
+  min-width: 0;
+}
+.emoji-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.emoji-btn {
+  width: 38px;
+  height: 38px;
+  border: 1.5px solid #d7e3dc;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.emoji-btn.sel {
+  border-color: #2f5d50;
+  background: #e3f1ea;
+  transform: scale(1.05);
+}
+.form-err {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: #c0564f;
+  background: #fdf1f0;
+  border: 1px solid #f3d4d1;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.form-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+.form-foot .btn.primary {
+  background: #2f5d50;
+  color: #fff;
+}
+.form-foot .btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (max-width: 560px) {
+  .form-row {
+    flex-direction: column;
+  }
+  .head-row {
+    flex-direction: column;
+  }
+  .create-btn {
+    width: 100%;
+  }
 }
 .modal-head {
   display: flex;

@@ -15,12 +15,12 @@
  *   // 或     = { success: false, text: '本地兜底回答', label: '', status: 429, hint: '错误提示' }
  */
 
-const API_KEY = 'sk-5f223cfad7fa435da12b65e7d109e715'
+import { getApiKey } from './userService'
 
 function buildHeaders() {
   return {
     'Content-Type': 'application/json',
-    Authorization: 'Bearer ' + API_KEY
+    Authorization: 'Bearer ' + getApiKey()
   }
 }
 
@@ -81,7 +81,7 @@ export function compressImage(file, maxSide = 1024, quality = 0.85) {
  * @param {string} opts.fallback - 可选，调用全部失败后的兜底文本（不传则返回空串）
  * @returns {Promise<{success:boolean, text:string, label?:string, status?:number, hint?:string}>}
  */
-export async function callAI({ messages, system, imageUrl = '', onStage, fallback = '' }) {
+export async function callAI({ messages, system, imageUrl = '', maxTokens = 800, onStage, fallback = '' }) {
   const hasImage = !!imageUrl
   // 历史消息中带 image 字段的 user 消息，把图片转为占位文字（纯文本模型可读）
   const normalizedHistory = messages.slice(0, -1).map(m => {
@@ -148,7 +148,7 @@ export async function callAI({ messages, system, imageUrl = '', onStage, fallbac
       model,
       messages: apiMessages,
       temperature: 0.7,
-      max_tokens: 800,
+      max_tokens: maxTokens,
       stream: false
     }
 
@@ -187,9 +187,16 @@ export async function callAI({ messages, system, imageUrl = '', onStage, fallbac
           continue outer
         }
 
-        if (res.status === 401 || res.status === 403 || res.status === 400) {
+        if (res.status === 401 || res.status === 403) {
           if (body?.error) lastErrMsg = body.error.message || body.error
           break outer
+        }
+
+        if (res.status === 400) {
+          // 400 通常是该候选模型不支持当前请求（如模型不存在/不支持图片），
+          // 记录错误后继续尝试下一个候选模型，而不是直接中断
+          if (body?.error) lastErrMsg = body.error.message || body.error
+          continue outer
         }
 
         if (!res.ok) {
